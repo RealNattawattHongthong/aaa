@@ -1,0 +1,442 @@
+#!/usr/bin/env python3
+"""
+AI Model Performance Test - 2 Hour Continuous Loop
+Tests CPU, GPU, and Memory performance through neural network training
+"""
+
+import time
+import psutil
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+import threading
+import json
+import os
+
+# Try importing TensorFlow/Keras, fallback to PyTorch if not available
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    from tensorflow.keras import layers
+    FRAMEWORK = "tensorflow"
+    print(f"Using TensorFlow {tf.__version__}")
+    
+    # Configure GPU if available
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        print(f"Found {len(gpus)} GPU(s)")
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    else:
+        print("No GPU found, using CPU")
+        
+except ImportError:
+    try:
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        FRAMEWORK = "pytorch"
+        print(f"Using PyTorch {torch.__version__}")
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
+        
+    except ImportError:
+        print("Neither TensorFlow nor PyTorch found. Please install one of them:")
+        print("pip install tensorflow")
+        print("or")
+        print("pip install torch torchvision")
+        exit(1)
+
+class PerformanceMonitor:
+    def __init__(self):
+        self.metrics = {
+            'timestamp': [],
+            'cpu_percent': [],
+            'memory_percent': [],
+            'memory_gb': [],
+            'gpu_utilization': [],
+            'gpu_memory': [],
+            'temperature': [],
+            'training_loss': [],
+            'training_accuracy': [],
+            'models_trained': 0,
+            'epochs_completed': 0
+        }
+        self.monitoring = False
+        self.start_time = None
+        
+    def start_monitoring(self):
+        self.monitoring = True
+        self.start_time = time.time()
+        monitor_thread = threading.Thread(target=self._monitor_loop)
+        monitor_thread.daemon = True
+        monitor_thread.start()
+        
+    def stop_monitoring(self):
+        self.monitoring = False
+        
+    def _monitor_loop(self):
+        while self.monitoring:
+            timestamp = time.time() - self.start_time
+            
+            # System metrics
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            
+            # Try to get GPU info
+            gpu_util = 0
+            gpu_mem = 0
+            temp = 0
+            
+            try:
+                import GPUtil
+                gpus = GPUtil.getGPUs()
+                if gpus:
+                    gpu = gpus[0]
+                    gpu_util = gpu.load * 100
+                    gpu_mem = gpu.memoryUtil * 100
+                    temp = gpu.temperature
+            except:
+                pass
+            
+            # Store metrics
+            self.metrics['timestamp'].append(timestamp)
+            self.metrics['cpu_percent'].append(cpu_percent)
+            self.metrics['memory_percent'].append(memory.percent)
+            self.metrics['memory_gb'].append(memory.used / (1024**3))
+            self.metrics['gpu_utilization'].append(gpu_util)
+            self.metrics['gpu_memory'].append(gpu_mem)
+            self.metrics['temperature'].append(temp)
+            
+            time.sleep(5)  # Monitor every 5 seconds
+    
+    def log_training_metrics(self, loss, accuracy):
+        if self.metrics['timestamp']:
+            self.metrics['training_loss'].append(loss)
+            self.metrics['training_accuracy'].append(accuracy)
+        
+    def print_status(self):
+        if not self.metrics['timestamp']:
+            return
+            
+        elapsed = self.metrics['timestamp'][-1]
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        seconds = int(elapsed % 60)
+        
+        print(f"\n{'='*60}")
+        print(f"PERFORMANCE STATUS - {hours:02d}:{minutes:02d}:{seconds:02d}")
+        print(f"{'='*60}")
+        print(f"Models Trained: {self.metrics['models_trained']}")
+        print(f"Epochs Completed: {self.metrics['epochs_completed']}")
+        print(f"CPU Usage: {self.metrics['cpu_percent'][-1]:.1f}%")
+        print(f"Memory Usage: {self.metrics['memory_percent'][-1]:.1f}% ({self.metrics['memory_gb'][-1]:.1f} GB)")
+        
+        if self.metrics['gpu_utilization'][-1] > 0:
+            print(f"GPU Usage: {self.metrics['gpu_utilization'][-1]:.1f}%")
+            print(f"GPU Memory: {self.metrics['gpu_memory'][-1]:.1f}%")
+            if self.metrics['temperature'][-1] > 0:
+                print(f"GPU Temperature: {self.metrics['temperature'][-1]:.1f}°C")
+        
+        if self.metrics['training_loss']:
+            print(f"Last Training Loss: {self.metrics['training_loss'][-1]:.4f}")
+            print(f"Last Training Accuracy: {self.metrics['training_accuracy'][-1]:.4f}")
+        
+        print(f"{'='*60}")
+
+class TensorFlowModelTrainer:
+    def __init__(self):
+        self.model_configs = [
+            {"name": "Dense_Small", "layers": [128, 64, 32], "input_dim": 784},
+            {"name": "Dense_Medium", "layers": [512, 256, 128, 64], "input_dim": 1000},
+            {"name": "Dense_Large", "layers": [1024, 512, 256, 128, 64], "input_dim": 2000},
+            {"name": "CNN_Small", "type": "cnn", "filters": [32, 64], "input_shape": (28, 28, 1)},
+            {"name": "CNN_Medium", "type": "cnn", "filters": [64, 128, 256], "input_shape": (32, 32, 3)},
+        ]
+        
+    def create_dense_model(self, config):
+        model = keras.Sequential([
+            layers.Input(shape=(config["input_dim"],))
+        ])
+        
+        for units in config["layers"]:
+            model.add(layers.Dense(units, activation='relu'))
+            model.add(layers.Dropout(0.3))
+            
+        model.add(layers.Dense(10, activation='softmax'))
+        return model
+    
+    def create_cnn_model(self, config):
+        model = keras.Sequential([
+            layers.Input(shape=config["input_shape"])
+        ])
+        
+        for filters in config["filters"]:
+            model.add(layers.Conv2D(filters, (3, 3), activation='relu'))
+            model.add(layers.MaxPooling2D((2, 2)))
+            
+        model.add(layers.Flatten())
+        model.add(layers.Dense(128, activation='relu'))
+        model.add(layers.Dropout(0.5))
+        model.add(layers.Dense(10, activation='softmax'))
+        return model
+    
+    def generate_data(self, config):
+        if config.get("type") == "cnn":
+            shape = config["input_shape"]
+            X = np.random.random((1000, *shape)).astype(np.float32)
+        else:
+            X = np.random.random((1000, config["input_dim"])).astype(np.float32)
+        
+        y = keras.utils.to_categorical(np.random.randint(0, 10, 1000), 10)
+        return X, y
+    
+    def train_model(self, monitor):
+        config = np.random.choice(self.model_configs)
+        print(f"\nTraining {config['name']} model...")
+        
+        # Create model
+        if config.get("type") == "cnn":
+            model = self.create_cnn_model(config)
+        else:
+            model = self.create_dense_model(config)
+        
+        model.compile(
+            optimizer='adam',
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        # Generate synthetic data
+        X_train, y_train = self.generate_data(config)
+        
+        # Train model
+        history = model.fit(
+            X_train, y_train,
+            epochs=10,
+            batch_size=32,
+            verbose=0
+        )
+        
+        # Log metrics
+        final_loss = history.history['loss'][-1]
+        final_accuracy = history.history['accuracy'][-1]
+        monitor.log_training_metrics(final_loss, final_accuracy)
+        monitor.metrics['models_trained'] += 1
+        monitor.metrics['epochs_completed'] += 10
+        
+        # Cleanup
+        del model
+        tf.keras.backend.clear_session()
+
+class PyTorchModelTrainer:
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    def create_model(self, input_size, hidden_sizes, output_size=10):
+        class DynamicNet(nn.Module):
+            def __init__(self, input_size, hidden_sizes, output_size):
+                super().__init__()
+                layers = []
+                prev_size = input_size
+                
+                for hidden_size in hidden_sizes:
+                    layers.extend([
+                        nn.Linear(prev_size, hidden_size),
+                        nn.ReLU(),
+                        nn.Dropout(0.3)
+                    ])
+                    prev_size = hidden_size
+                
+                layers.append(nn.Linear(prev_size, output_size))
+                self.network = nn.Sequential(*layers)
+                
+            def forward(self, x):
+                return self.network(x)
+        
+        return DynamicNet(input_size, hidden_sizes, output_size)
+    
+    def train_model(self, monitor):
+        # Random model configuration
+        configs = [
+            {"input_size": 784, "hidden_sizes": [128, 64, 32]},
+            {"input_size": 1000, "hidden_sizes": [512, 256, 128, 64]},
+            {"input_size": 2000, "hidden_sizes": [1024, 512, 256, 128, 64]},
+        ]
+        
+        config = np.random.choice(configs)
+        print(f"\nTraining PyTorch model with config: {config}")
+        
+        # Create model
+        model = self.create_model(
+            config["input_size"], 
+            config["hidden_sizes"]
+        ).to(self.device)
+        
+        # Generate synthetic data
+        X = torch.randn(1000, config["input_size"]).to(self.device)
+        y = torch.randint(0, 10, (1000,)).to(self.device)
+        
+        # Setup training
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters())
+        
+        # Training loop
+        model.train()
+        for epoch in range(10):
+            optimizer.zero_grad()
+            outputs = model(X)
+            loss = criterion(outputs, y)
+            loss.backward()
+            optimizer.step()
+            
+            if epoch == 9:  # Last epoch
+                with torch.no_grad():
+                    _, predicted = torch.max(outputs.data, 1)
+                    accuracy = (predicted == y).float().mean().item()
+                    monitor.log_training_metrics(loss.item(), accuracy)
+        
+        monitor.metrics['models_trained'] += 1
+        monitor.metrics['epochs_completed'] += 10
+        
+        # Cleanup
+        del model, X, y
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+def save_results(monitor):
+    """Save performance results to files"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Save metrics to JSON
+    results = {
+        'test_duration_hours': 2,
+        'framework': FRAMEWORK,
+        'total_models_trained': monitor.metrics['models_trained'],
+        'total_epochs': monitor.metrics['epochs_completed'],
+        'average_cpu_usage': np.mean(monitor.metrics['cpu_percent']),
+        'max_cpu_usage': max(monitor.metrics['cpu_percent']) if monitor.metrics['cpu_percent'] else 0,
+        'average_memory_usage': np.mean(monitor.metrics['memory_percent']),
+        'max_memory_usage': max(monitor.metrics['memory_percent']) if monitor.metrics['memory_percent'] else 0,
+        'average_gpu_usage': np.mean(monitor.metrics['gpu_utilization']) if monitor.metrics['gpu_utilization'] else 0,
+        'max_gpu_usage': max(monitor.metrics['gpu_utilization']) if monitor.metrics['gpu_utilization'] else 0,
+    }
+    
+    with open(f'ai_performance_test_{timestamp}.json', 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    # Create performance plots
+    if monitor.metrics['timestamp']:
+        create_performance_plots(monitor, timestamp)
+    
+    print(f"\nResults saved to ai_performance_test_{timestamp}.json")
+    print(f"Performance plots saved to ai_performance_plots_{timestamp}.png")
+
+def create_performance_plots(monitor, timestamp):
+    """Create performance visualization plots"""
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    timestamps = np.array(monitor.metrics['timestamp']) / 3600  # Convert to hours
+    
+    # CPU Usage
+    ax1.plot(timestamps, monitor.metrics['cpu_percent'], 'b-', linewidth=2)
+    ax1.set_title('CPU Usage Over Time')
+    ax1.set_xlabel('Time (hours)')
+    ax1.set_ylabel('CPU Usage (%)')
+    ax1.grid(True, alpha=0.3)
+    
+    # Memory Usage
+    ax2.plot(timestamps, monitor.metrics['memory_percent'], 'r-', linewidth=2)
+    ax2.set_title('Memory Usage Over Time')
+    ax2.set_xlabel('Time (hours)')
+    ax2.set_ylabel('Memory Usage (%)')
+    ax2.grid(True, alpha=0.3)
+    
+    # GPU Usage (if available)
+    if any(monitor.metrics['gpu_utilization']):
+        ax3.plot(timestamps, monitor.metrics['gpu_utilization'], 'g-', linewidth=2)
+        ax3.set_title('GPU Usage Over Time')
+        ax3.set_xlabel('Time (hours)')
+        ax3.set_ylabel('GPU Usage (%)')
+    else:
+        ax3.text(0.5, 0.5, 'No GPU Data', ha='center', va='center', transform=ax3.transAxes)
+        ax3.set_title('GPU Usage Over Time')
+    ax3.grid(True, alpha=0.3)
+    
+    # Training Progress
+    if monitor.metrics['training_loss']:
+        ax4.plot(monitor.metrics['training_loss'], 'purple', linewidth=2, alpha=0.7, label='Loss')
+        ax4_twin = ax4.twinx()
+        ax4_twin.plot(monitor.metrics['training_accuracy'], 'orange', linewidth=2, alpha=0.7, label='Accuracy')
+        ax4.set_title('Training Metrics')
+        ax4.set_xlabel('Model Number')
+        ax4.set_ylabel('Loss', color='purple')
+        ax4_twin.set_ylabel('Accuracy', color='orange')
+        ax4.legend(loc='upper left')
+        ax4_twin.legend(loc='upper right')
+    else:
+        ax4.text(0.5, 0.5, 'No Training Data', ha='center', va='center', transform=ax4.transAxes)
+        ax4.set_title('Training Metrics')
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'ai_performance_plots_{timestamp}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+def main():
+    print("🚀 AI Model Performance Test - 2 Hour Loop")
+    print("=" * 50)
+    print(f"Framework: {FRAMEWORK.upper()}")
+    print(f"Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 50)
+    
+    # Initialize components
+    monitor = PerformanceMonitor()
+    
+    if FRAMEWORK == "tensorflow":
+        trainer = TensorFlowModelTrainer()
+    else:
+        trainer = PyTorchModelTrainer()
+    
+    # Start monitoring
+    monitor.start_monitoring()
+    
+    # Calculate end time (2 hours from now)
+    end_time = time.time() + (2 * 3600)  # 2 hours in seconds
+    
+    try:
+        print("\nStarting 2-hour AI training loop...")
+        print("Press Ctrl+C to stop early\n")
+        
+        while time.time() < end_time:
+            # Train a model
+            trainer.train_model(monitor)
+            
+            # Print status every few models
+            if monitor.metrics['models_trained'] % 3 == 0:
+                monitor.print_status()
+            
+            # Small delay to prevent overwhelming the system
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("\n\nTest interrupted by user")
+    
+    finally:
+        # Stop monitoring and save results
+        monitor.stop_monitoring()
+        time.sleep(2)  # Wait for monitoring thread to finish
+        
+        print("\n🏁 Test completed!")
+        monitor.print_status()
+        save_results(monitor)
+        
+        print("\nFinal Summary:")
+        print(f"Total Runtime: {(time.time() - monitor.start_time)/3600:.2f} hours")
+        print(f"Models Trained: {monitor.metrics['models_trained']}")
+        print(f"Total Epochs: {monitor.metrics['epochs_completed']}")
+        print("\nThank you for testing your system's AI performance! 🎯")
+
+if __name__ == "__main__":
+    main()
